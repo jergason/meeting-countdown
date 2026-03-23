@@ -1,0 +1,29 @@
+[project]
+name = "dramatic-meeting-timer"
+version = "0.1.0"
+description = "macOS menu bar app that plays Helldivers drop pod music before meetings"
+requires-python = ">=3.11"
+dependencies = [
+    "rumps>=0.4.0",
+    "pyobjc-framework-EventKit>=10.0",
+    "pyobjc-core>=10.0",
+]
+
+[project.scripts]
+dramatic-meeting-timer = "app:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.9",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 99
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
