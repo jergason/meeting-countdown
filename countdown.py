@@ -2,12 +2,14 @@
 
 from datetime import datetime
 
-LEAD_TIME_SECONDS = 40
+DEFAULT_LEAD_TIME_SECONDS = 40
 
 
-def format_countdown(remaining_seconds: float) -> str:
+def format_countdown(
+    remaining_seconds: float, lead_time: float = DEFAULT_LEAD_TIME_SECONDS
+) -> str:
     """Format remaining seconds into a menu bar title string."""
-    if remaining_seconds <= LEAD_TIME_SECONDS:
+    if remaining_seconds <= lead_time:
         secs = int(remaining_seconds)
         return f"🔊 T-{secs}s"
     elif remaining_seconds <= 300:

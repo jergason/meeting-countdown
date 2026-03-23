@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from countdown import format_countdown, format_menu_item
+from countdown import DEFAULT_LEAD_TIME_SECONDS, format_countdown, format_menu_item
 
 
 class TestFormatCountdown:
@@ -36,6 +36,17 @@ class TestFormatCountdown:
 
     def test_several_hours(self):
         assert format_countdown(10800) == "🎵 3.0h"
+
+    def test_custom_lead_time(self):
+        # 60s lead time — 55s remaining should be in countdown zone
+        assert format_countdown(55, lead_time=60) == "🔊 T-55s"
+
+    def test_custom_lead_time_outside_zone(self):
+        # 20s lead time — 25s remaining should NOT be in countdown zone
+        assert format_countdown(25, lead_time=20) == "🎵 0:25"
+
+    def test_default_lead_time_matches_constant(self):
+        assert DEFAULT_LEAD_TIME_SECONDS == 40
 
 
 class TestFormatMenuItem:

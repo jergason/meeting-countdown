@@ -12,11 +12,22 @@ Requires Python 3.11+, [uv](https://docs.astral.sh/uv/).
 # install dependencies
 uv sync
 
+# add your audio file
+mkdir -p assets
+# drop any mp3/m4a/wav/aiff file in here — the app auto-detects
+# the file's duration and starts playback that many seconds before
+# your meeting, so the song ends right as the meeting begins.
+cp /path/to/your/song.mp3 assets/
+
 # run it
 uv run python app.py
 ```
 
 On first launch, macOS will ask for calendar access — grant it.
+
+### Assets
+
+The app looks for the first audio file (mp3, m4a, wav, aiff) in the `assets/` directory. It reads the file's duration at startup and uses that as the countdown lead time — so whatever song you pick, it'll finish right as your meeting starts.
 
 ## How it works
 
@@ -45,10 +56,8 @@ uv run pytest -v        # test
 
 ## Configuration
 
-Edit constants at the top of `app.py`:
-
-- `LEAD_TIME_SECONDS` — how early to start the countdown/music (default: 40, matching the song length)
-- `POLL_INTERVAL` — how often to check the calendar (default: 30s)
+- **Countdown lead time** is determined automatically from your audio file's duration. No config needed.
+- `POLL_INTERVAL` in `app.py` — how often to check the calendar (default: 30s)
 
 ## Auto-start on login
 

@@ -12,13 +12,41 @@ from datetime import datetime, timedelta
 import EventKit
 import rumps
 
-from countdown import LEAD_TIME_SECONDS, format_countdown, format_menu_item
+from countdown import DEFAULT_LEAD_TIME_SECONDS, format_countdown, format_menu_item
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-MUSIC_PATH = os.path.join(SCRIPT_DIR, "assets", "drop_pod.mp3")
+ASSETS_DIR = os.path.join(SCRIPT_DIR, "assets")
 
 POLL_INTERVAL = 30
 TICK_INTERVAL = 1
+
+
+def find_music_file() -> str | None:
+    """Find the first mp3/m4a/wav file in the assets directory."""
+    if not os.path.isdir(ASSETS_DIR):
+        return None
+    for f in sorted(os.listdir(ASSETS_DIR)):
+        if f.lower().endswith((".mp3", ".m4a", ".wav", ".aiff")):
+            return os.path.join(ASSETS_DIR, f)
+    return None
+
+
+def get_audio_duration(path: str) -> float:
+    """Get audio duration in seconds using macOS afinfo."""
+    try:
+        result = subprocess.run(
+            ["afinfo", "-b", path],
+            capture_output=True,
+            text=True,
+        )
+        # afinfo -b output: "39.864 sec, format: ..."
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if "sec," in line:
+                return float(line.split("sec,")[0].strip())
+    except (subprocess.SubprocessError, ValueError):
+        pass
+    return DEFAULT_LEAD_TIME_SECONDS
 
 
 class DramaticMeetingTimer(rumps.App):
@@ -29,6 +57,12 @@ class DramaticMeetingTimer(rumps.App):
         self.next_event_start = None
         self.music_process = None
         self.music_played_for_event = None
+
+        self.music_path = find_music_file()
+        if self.music_path:
+            self.lead_time = get_audio_duration(self.music_path)
+        else:
+            self.lead_time = DEFAULT_LEAD_TIME_SECONDS
 
         self.enable_item = rumps.MenuItem("Disable", callback=self.toggle_enabled)
         self.next_meeting_item = rumps.MenuItem("Next: —")
@@ -115,13 +149,12 @@ class DramaticMeetingTimer(rumps.App):
             self._poll_calendar(None)
             return
 
-        result = format_countdown(remaining)
-        self.title = result
+        self.title = format_countdown(remaining, self.lead_time)
         self.next_meeting_item.title = format_menu_item(
             self.next_event_title, self.next_event_start
         )
 
-        if remaining <= LEAD_TIME_SECONDS:
+        if remaining <= self.lead_time:
             self._maybe_play_music()
 
     def _maybe_play_music(self):
@@ -130,16 +163,16 @@ class DramaticMeetingTimer(rumps.App):
             return
         self.music_played_for_event = event_key
 
-        if not os.path.exists(MUSIC_PATH):
+        if not self.music_path or not os.path.exists(self.music_path):
             rumps.notification(
                 "Dramatic Meeting Timer",
                 "Music file missing",
-                f"Expected: {MUSIC_PATH}",
+                f"Place an audio file in {ASSETS_DIR}",
             )
             return
 
         self.music_process = subprocess.Popen(
-            ["afplay", MUSIC_PATH],
+            ["afplay", self.music_path],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
