@@ -2,15 +2,14 @@
 name = "dramatic-meeting-timer"
 version = "0.1.0"
 description = "macOS menu bar app that plays Helldivers drop pod music before meetings"
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "rumps>=0.4.0",
+    "pyobjc-framework-AVFoundation>=10.0",
     "pyobjc-framework-EventKit>=10.0",
     "pyobjc-core>=10.0",
 ]
-
-[project.scripts]
-dramatic-meeting-timer = "app:main"
 
 [dependency-groups]
 dev = [

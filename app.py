@@ -1,28 +1,43 @@
 #!/usr/bin/env python3
 """
-Dramatic Meeting Timer — a macOS menu bar app that plays
+Dramatic Meeting Timer: a macOS menu bar app that plays
 Helldivers drop pod music as a countdown to your next meeting.
 """
 
 import os
-import subprocess
-import threading
 from datetime import datetime, timedelta
 
+import AVFoundation
 import EventKit
 import rumps
+from Foundation import NSURL, NSDate
 
-from countdown import DEFAULT_LEAD_TIME_SECONDS, format_countdown, format_menu_item
+from countdown import (
+    DEFAULT_LEAD_TIME_SECONDS,
+    AwaitingCalendarAccess,
+    CalendarEvent,
+    CalendarUnavailable,
+    Disabled,
+    Idle,
+    TimerState,
+    Upcoming,
+    decide_tick,
+    disable,
+    enable,
+    normalize_lead_time,
+    resolve_calendar_access,
+)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ASSETS_DIR = os.path.join(SCRIPT_DIR, "assets")
 
 POLL_INTERVAL = 30
 TICK_INTERVAL = 1
+CALENDAR_LOOKAHEAD = timedelta(days=7)
 
 
 def find_music_file() -> str | None:
-    """Find the first mp3/m4a/wav file in the assets directory."""
+    """Find the first supported audio file in the assets directory."""
     if not os.path.isdir(ASSETS_DIR):
         return None
     for f in sorted(os.listdir(ASSETS_DIR)):
@@ -31,38 +46,18 @@ def find_music_file() -> str | None:
     return None
 
 
-def get_audio_duration(path: str) -> float:
-    """Get audio duration in seconds using macOS afinfo."""
-    try:
-        result = subprocess.run(
-            ["afinfo", "-b", path],
-            capture_output=True,
-            text=True,
-        )
-        # afinfo -b output: "39.864 sec, format: ..."
-        for line in result.stdout.splitlines():
-            line = line.strip()
-            if "sec," in line:
-                return float(line.split("sec,")[0].strip())
-    except (subprocess.SubprocessError, ValueError):
-        pass
-    return DEFAULT_LEAD_TIME_SECONDS
-
-
 class DramaticMeetingTimer(rumps.App):
     def __init__(self):
         super().__init__("", quit_button=None)
-        self.enabled = True
-        self.next_event_title = None
-        self.next_event_start = None
-        self.music_process = None
-        self.music_played_for_event = None
+        self.state: TimerState = AwaitingCalendarAccess()
+        self._pending_calendar_access_result = None
+        self.music_played_for_event: tuple[str, float] | None = None
 
         self.music_path = find_music_file()
-        if self.music_path:
-            self.lead_time = get_audio_duration(self.music_path)
-        else:
-            self.lead_time = DEFAULT_LEAD_TIME_SECONDS
+        self.audio_player, self.audio_error = self._load_audio_player(self.music_path)
+        self.lead_time = normalize_lead_time(
+            self.audio_player.duration() if self.audio_player else DEFAULT_LEAD_TIME_SECONDS
+        )
 
         self.enable_item = rumps.MenuItem("Disable", callback=self.toggle_enabled)
         self.next_meeting_item = rumps.MenuItem("Next: —")
@@ -79,115 +74,130 @@ class DramaticMeetingTimer(rumps.App):
         self.tick_timer = rumps.Timer(self._tick, TICK_INTERVAL)
         self.tick_timer.start()
 
-        self._poll_calendar(None)
+        self._tick(None)
 
     def _request_calendar_access(self):
-        semaphore = threading.Semaphore(0)
-        granted_ref = [False]
-
         def handler(granted, error):
-            granted_ref[0] = granted
-            semaphore.release()
+            self._pending_calendar_access_result = (bool(granted), error)
 
-        self.event_store.requestFullAccessToEventsWithCompletion_(handler)
-        semaphore.acquire(timeout=10)
-
-        if not granted_ref[0]:
-            rumps.notification(
-                "Dramatic Meeting Timer",
-                "Calendar access denied",
-                "Grant calendar access in System Settings > Privacy & Security > Calendars",
+        if hasattr(self.event_store, "requestFullAccessToEventsWithCompletion_"):
+            self.event_store.requestFullAccessToEventsWithCompletion_(handler)
+        else:
+            self.event_store.requestAccessToEntityType_completion_(
+                EventKit.EKEntityTypeEvent, handler
             )
 
     def _poll_calendar(self, _sender):
-        if not self.enabled:
+        if not isinstance(self.state, (Idle, Upcoming)):
             return
 
-        now = datetime.now()
-        end = now + timedelta(hours=4)
+        now = datetime.now().astimezone()
+        end = now + CALENDAR_LOOKAHEAD
 
-        ns_now = self._datetime_to_nsdate(now)
-        ns_end = self._datetime_to_nsdate(end)
-
-        predicate = self.event_store.predicateForEventsWithStartDate_endDate_calendars_(
-            ns_now, ns_end, None
-        )
-        events = self.event_store.eventsMatchingPredicate_(predicate)
-
-        if not events:
-            self.next_event_title = None
-            self.next_event_start = None
+        try:
+            predicate = self.event_store.predicateForEventsWithStartDate_endDate_calendars_(
+                self._datetime_to_nsdate(now),
+                self._datetime_to_nsdate(end),
+                None,
+            )
+            events = self.event_store.eventsMatchingPredicate_(predicate) or []
+        except Exception as error:
+            self.state = CalendarUnavailable(f"Could not read Calendar: {error}")
+            self._stop_music()
             return
 
-        upcoming = []
+        upcoming: list[CalendarEvent] = []
         for ev in events:
-            if ev.isAllDay():
+            if ev.isAllDay() or ev.status() == EventKit.EKEventStatusCanceled:
                 continue
             start = self._nsdate_to_datetime(ev.startDate())
             if start > now:
-                upcoming.append((start, ev.title()))
+                identifier = (
+                    ev.eventIdentifier()
+                    or ev.calendarItemIdentifier()
+                    or f"{ev.title()}@{start.timestamp()}"
+                )
+                upcoming.append(CalendarEvent(identifier, ev.title(), start))
 
-        upcoming.sort(key=lambda x: x[0])
+        upcoming.sort(key=lambda event: event.starts_at)
+        previous_event = self.state.event if isinstance(self.state, Upcoming) else None
+        next_event = upcoming[0] if upcoming else None
 
-        if upcoming:
-            self.next_event_start, self.next_event_title = upcoming[0]
-        else:
-            self.next_event_title = None
-            self.next_event_start = None
+        if previous_event and (not next_event or previous_event.key != next_event.key):
+            self._stop_music()
+        self.state = Upcoming(next_event) if next_event else Idle()
 
     def _tick(self, _sender):
-        if not self.enabled or not self.next_event_start:
-            self.title = "🎵 —"
-            self.next_meeting_item.title = "Next: —"
-            return
+        self._consume_calendar_access_result()
+        decision = decide_tick(self.state, datetime.now().astimezone(), self.lead_time)
+        self.title = decision.menu_bar_title
+        self.next_meeting_item.title = decision.meeting_menu_title
 
-        now = datetime.now()
-        remaining = (self.next_event_start - now).total_seconds()
-
-        if remaining <= 0:
-            self.title = "🎵 NOW"
+        if decision.refresh_calendar:
             self._poll_calendar(None)
+        if decision.playback:
+            self._maybe_play_music(
+                decision.playback.event_key,
+                decision.playback.offset_seconds,
+            )
+
+    def _consume_calendar_access_result(self):
+        result = self._pending_calendar_access_result
+        if result is None:
             return
+        self._pending_calendar_access_result = None
 
-        self.title = format_countdown(remaining, self.lead_time)
-        self.next_meeting_item.title = format_menu_item(
-            self.next_event_title, self.next_event_start
-        )
+        granted, error = result
+        if error:
+            reason = f"Calendar access failed: {error.localizedDescription()}"
+        else:
+            reason = "Calendar access denied"
+        self.state = resolve_calendar_access(self.state, granted=granted, reason=reason)
 
-        if remaining <= self.lead_time:
-            self._maybe_play_music()
+        if granted and isinstance(self.state, Idle):
+            self._poll_calendar(None)
+        elif not granted:
+            rumps.notification(
+                "Dramatic Meeting Timer",
+                reason,
+                "Grant access in System Settings > Privacy & Security > Calendars",
+            )
 
-    def _maybe_play_music(self):
-        event_key = (self.next_event_title, self.next_event_start)
+    def _maybe_play_music(self, event_key: tuple[str, float], offset_seconds: float):
         if self.music_played_for_event == event_key:
             return
         self.music_played_for_event = event_key
 
-        if not self.music_path or not os.path.exists(self.music_path):
+        if not self.audio_player:
+            detail = self.audio_error or f"Place an audio file in {ASSETS_DIR}"
             rumps.notification(
                 "Dramatic Meeting Timer",
-                "Music file missing",
-                f"Place an audio file in {ASSETS_DIR}",
+                "Music unavailable",
+                detail,
             )
             return
 
-        self.music_process = subprocess.Popen(
-            ["afplay", self.music_path],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+        self.audio_player.setCurrentTime_(
+            min(offset_seconds, max(0.0, self.audio_player.duration() - 0.01))
         )
+        self.audio_player.play()
 
     def toggle_enabled(self, sender):
-        self.enabled = not self.enabled
-        sender.title = "Disable" if self.enabled else "Enable"
-        if not self.enabled:
-            self.title = "🎵 off"
+        if isinstance(self.state, Disabled):
+            self.state = enable(self.state)
+            sender.title = "Disable"
+            if isinstance(self.state, Idle):
+                self._poll_calendar(None)
+        else:
+            self.state = disable(self.state)
+            sender.title = "Enable"
             self._stop_music()
+        self._tick(None)
 
     def _stop_music(self):
-        if self.music_process and self.music_process.poll() is None:
-            self.music_process.terminate()
-            self.music_process = None
+        if self.audio_player and self.audio_player.isPlaying():
+            self.audio_player.stop()
+        self.music_played_for_event = None
 
     def quit_app(self, _sender):
         self._stop_music()
@@ -195,13 +205,26 @@ class DramaticMeetingTimer(rumps.App):
 
     @staticmethod
     def _datetime_to_nsdate(dt):
-        from Foundation import NSDate
-
         return NSDate.dateWithTimeIntervalSince1970_(dt.timestamp())
 
     @staticmethod
     def _nsdate_to_datetime(nsdate):
-        return datetime.fromtimestamp(nsdate.timeIntervalSince1970())
+        return datetime.fromtimestamp(nsdate.timeIntervalSince1970()).astimezone()
+
+    @staticmethod
+    def _load_audio_player(path):
+        if not path or not os.path.exists(path):
+            return None, f"Place an audio file in {ASSETS_DIR}"
+
+        player, error = AVFoundation.AVAudioPlayer.alloc().initWithContentsOfURL_error_(
+            NSURL.fileURLWithPath_(path),
+            None,
+        )
+        if not player:
+            detail = error.localizedDescription() if error else f"Could not load {path}"
+            return None, detail
+        player.prepareToPlay()
+        return player, None
 
 
 def main():

@@ -6,4 +6,3 @@ __pycache__/
 assets/
 *.egg-info/
 dist/
-uv.lock

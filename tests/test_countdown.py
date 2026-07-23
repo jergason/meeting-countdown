@@ -1,6 +1,11 @@
 from datetime import datetime
 
-from countdown import DEFAULT_LEAD_TIME_SECONDS, format_countdown, format_menu_item
+from countdown import (
+    DEFAULT_LEAD_TIME_SECONDS,
+    format_countdown,
+    format_menu_item,
+    normalize_lead_time,
+)
 
 
 class TestFormatCountdown:
@@ -70,3 +75,17 @@ class TestFormatMenuItem:
         name = "a" * 30
         result = format_menu_item(name, dt)
         assert "..." not in result
+
+
+class TestNormalizeLeadTime:
+    def test_uses_audio_duration(self):
+        assert normalize_lead_time(39.864) == 39.864
+
+    def test_rejects_zero(self):
+        assert normalize_lead_time(0) == DEFAULT_LEAD_TIME_SECONDS
+
+    def test_rejects_negative_duration(self):
+        assert normalize_lead_time(-1) == DEFAULT_LEAD_TIME_SECONDS
+
+    def test_rejects_non_finite_duration(self):
+        assert normalize_lead_time(float("nan")) == DEFAULT_LEAD_TIME_SECONDS

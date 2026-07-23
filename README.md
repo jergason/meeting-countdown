@@ -1,20 +1,24 @@
 # Dramatic Meeting Timer
 
-A macOS menu bar app that plays [Helldivers 2 drop pod music](https://www.youtube.com/watch?v=DSesmlxKeGA) as a ~40 second countdown to your next calendar event.
+A macOS menu bar app that plays [Helldivers 2 drop pod music](https://www.youtube.com/watch?v=DSesmlxKeGA) as a countdown to your next calendar event.
 
 The song ends right as the meeting starts. You're welcome.
 
 ## Setup
 
-Requires Python 3.11+, [uv](https://docs.astral.sh/uv/).
+Requires macOS and [uv](https://docs.astral.sh/uv/). The repository pins Python
+3.11 through `.python-version`; uv will use or install it during setup.
 
 ```bash
+# install uv if needed
+brew install uv
+
 # install dependencies
 uv sync
 
 # add your audio file
 mkdir -p assets
-# drop any mp3/m4a/wav/aiff file in here — the app auto-detects
+# drop any mp3/m4a/wav/aiff file in here; the app auto-detects
 # the file's duration and starts playback that many seconds before
 # your meeting, so the song ends right as the meeting begins.
 cp /path/to/your/song.mp3 assets/
@@ -23,15 +27,21 @@ cp /path/to/your/song.mp3 assets/
 uv run python app.py
 ```
 
-On first launch, macOS will ask for calendar access — grant it.
+The app appears in the menu bar as `🎵`. On first launch, macOS will ask for
+Calendar access. Grant it. Use **Quit** in the app menu to stop it.
 
 ### Assets
 
-The app looks for the first audio file (mp3, m4a, wav, aiff) in the `assets/` directory. It reads the file's duration at startup and uses that as the countdown lead time — so whatever song you pick, it'll finish right as your meeting starts.
+The app looks for the first audio file (mp3, m4a, wav, aiff) in the `assets/`
+directory. It reads the file's duration at startup and uses that as the countdown
+lead time. If the app discovers a meeting after the countdown has started, it seeks
+into the song so playback still finishes when the meeting begins.
 
 ## How it works
 
-The app reads your next meeting from **macOS Calendar** via EventKit. Any calendar synced to your Mac (Google, Outlook/Exchange, iCloud, CalDAV) is automatically visible — no OAuth required.
+The app reads your next non-all-day, non-cancelled event during the next seven days
+from **macOS Calendar** via EventKit. Any calendar synced to your Mac (Google,
+Outlook/Exchange, iCloud, CalDAV) is automatically visible. No OAuth required.
 
 ### Menu bar states
 
@@ -40,9 +50,10 @@ The app reads your next meeting from **macOS Calendar** via EventKit. Any calend
 | > 1 hour              | `1.5h`  |
 | < 1 hour              | `30m`   |
 | < 5 min               | `4:30`  |
-| < 40s (music playing) | `T-35s` |
+| < audio duration      | `T-35s` |
 | Meeting started       | `NOW`   |
 | Disabled              | `off`   |
+| Calendar unavailable  | `!`     |
 
 The dropdown menu shows the next meeting name and time, plus an Enable/Disable toggle.
 
@@ -56,14 +67,22 @@ uv run pytest -v        # test
 
 ## Configuration
 
-- **Countdown lead time** is determined automatically from your audio file's duration. No config needed.
-- `POLL_INTERVAL` in `app.py` — how often to check the calendar (default: 30s)
+- **Countdown lead time** is determined automatically from your audio file's duration.
+- `POLL_INTERVAL` in `app.py`: how often to check the calendar (default: 30s).
+- `CALENDAR_LOOKAHEAD` in `app.py`: how far ahead to search (default: 7 days).
 
 ## Auto-start on login
 
+Run the app manually once first so macOS can ask for Calendar access. Then create a
+LaunchAgent using absolute paths:
+
 ```bash
-# create a launchd plist (adjust the path to your clone)
-cat > ~/Library/LaunchAgents/com.dramatic-meeting-timer.plist << 'EOF'
+# Replace /absolute/path/to/dramatic-meeting-timer below with this repository's path.
+mkdir -p ~/Library/LaunchAgents
+$EDITOR ~/Library/LaunchAgents/com.dramatic-meeting-timer.plist
+```
+
+```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -72,13 +91,29 @@ cat > ~/Library/LaunchAgents/com.dramatic-meeting-timer.plist << 'EOF'
     <string>com.dramatic-meeting-timer</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/bin/bash</string>
-        <string>-c</string>
-        <string>cd /path/to/meeting-countdown && uv run python app.py</string>
+        <string>/absolute/path/to/dramatic-meeting-timer/.venv/bin/python</string>
+        <string>/absolute/path/to/dramatic-meeting-timer/app.py</string>
     </array>
+    <key>WorkingDirectory</key>
+    <string>/absolute/path/to/dramatic-meeting-timer</string>
     <key>RunAtLoad</key>
     <true/>
 </dict>
 </plist>
-EOF
 ```
+
+Load it:
+
+```bash
+launchctl bootout gui/"$(id -u)" ~/Library/LaunchAgents/com.dramatic-meeting-timer.plist 2>/dev/null || true
+launchctl bootstrap gui/"$(id -u)" ~/Library/LaunchAgents/com.dramatic-meeting-timer.plist
+```
+
+## Troubleshooting
+
+- **`!` in the menu bar:** grant Calendar access in **System Settings → Privacy &
+  Security → Calendars**, then restart the app.
+- **No music:** confirm exactly one supported audio file is present in `assets/`,
+  then restart the app. The file is loaded at startup.
+- **LaunchAgent does not start:** confirm both absolute paths in the plist exist and
+  run `plutil -lint ~/Library/LaunchAgents/com.dramatic-meeting-timer.plist`.
