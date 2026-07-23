@@ -5,6 +5,7 @@ Helldivers drop pod music as a countdown to your next meeting.
 """
 
 import os
+import sys
 from datetime import datetime, timedelta
 
 import AVFoundation
@@ -29,7 +30,16 @@ from countdown import (
 )
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-ASSETS_DIR = os.path.join(SCRIPT_DIR, "assets")
+
+
+def assets_dir() -> str:
+    """Locate audio assets in the source tree or a py2app bundle."""
+    if getattr(sys, "frozen", False) and (resource_path := os.environ.get("RESOURCEPATH")):
+        return os.path.join(resource_path, "assets")
+    return os.path.join(SCRIPT_DIR, "assets")
+
+
+ASSETS_DIR = assets_dir()
 
 POLL_INTERVAL = 30
 TICK_INTERVAL = 1

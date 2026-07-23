@@ -1,7 +1,9 @@
+import os
 from types import SimpleNamespace
 
 import EventKit
 
+import app
 from app import DramaticMeetingTimer
 
 
@@ -41,3 +43,20 @@ def test_falls_back_to_legacy_calendar_access_api():
 
     assert store.entity_type == EventKit.EKEntityTypeEvent
     assert timer._pending_calendar_access_result == (True, None)
+
+
+def test_assets_dir_uses_bundle_resources_when_frozen(monkeypatch):
+    monkeypatch.setattr(app.sys, "frozen", "macosx_app", raising=False)
+    monkeypatch.setenv("RESOURCEPATH", "/Example.app/Contents/Resources")
+
+    assert app.assets_dir() == os.path.join(
+        "/Example.app/Contents/Resources",
+        "assets",
+    )
+
+
+def test_assets_dir_uses_source_tree_during_development(monkeypatch):
+    monkeypatch.delattr(app.sys, "frozen", raising=False)
+    monkeypatch.delenv("RESOURCEPATH", raising=False)
+
+    assert app.assets_dir() == os.path.join(app.SCRIPT_DIR, "assets")

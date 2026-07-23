@@ -6,12 +6,12 @@ The song ends right as the meeting starts. You're welcome.
 
 ## Setup
 
-Requires macOS and [uv](https://docs.astral.sh/uv/). The repository pins Python
-3.11 through `.python-version`; uv will use or install it during setup.
+Requires macOS, [uv](https://docs.astral.sh/uv/), and Homebrew's framework build of
+Python 3.11. The framework build lets py2app create a standalone macOS application.
 
 ```bash
-# install uv if needed
-brew install uv
+# install the build tools if needed
+brew install uv python@3.11
 
 # install dependencies
 uv sync
@@ -57,6 +57,57 @@ Outlook/Exchange, iCloud, CalDAV) is automatically visible. No OAuth required.
 
 The dropdown menu shows the next meeting name and time, plus an Enable/Disable toggle.
 
+## Build a clickable macOS app
+
+The build uses [py2app](https://py2app.readthedocs.io/) to create a standalone,
+menu-bar-only application. From the repository root:
+
+```bash
+# Install the framework Python required by py2app and the uv package manager.
+brew install python@3.11 uv
+
+# Install the exact locked dependencies.
+uv sync --locked
+
+# Add the audio that should be bundled with the app.
+mkdir -p assets
+cp /path/to/your/song.mp3 assets/
+
+# Create a clean application bundle.
+uv run --locked python scripts/build_app.py
+```
+
+The standalone application is created at:
+
+```text
+dist/Dramatic Meeting Timer.app
+```
+
+Double-click it in Finder or launch it from the terminal:
+
+```bash
+open "dist/Dramatic Meeting Timer.app"
+```
+
+On first launch, grant the packaged app Calendar access when macOS asks. This is
+separate from permission previously granted to Terminal or Python.
+
+The build script:
+
+- removes stale `build/` and `dist/` output;
+- includes the Python runtime and required frameworks;
+- copies the audio currently in `assets/` into the bundle;
+- adds the Calendar privacy descriptions to `Info.plist`; and
+- verifies the completed app's code signature.
+
+Rebuild after changing the source code, audio, or packaging configuration. To keep
+the app, drag it into your `Applications` folder. It runs only in the menu bar, so
+it does not add a Dock icon.
+
+The local build is ad-hoc signed and is intended for use on the Mac that built it.
+Distributing it to other people would also require a Developer ID signature and
+Apple notarization.
+
 ## Development
 
 ```bash
@@ -73,41 +124,9 @@ uv run pytest -v        # test
 
 ## Auto-start on login
 
-Run the app manually once first so macOS can ask for Calendar access. Then create a
-LaunchAgent using absolute paths:
-
-```bash
-# Replace /absolute/path/to/dramatic-meeting-timer below with this repository's path.
-mkdir -p ~/Library/LaunchAgents
-$EDITOR ~/Library/LaunchAgents/com.dramatic-meeting-timer.plist
-```
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.dramatic-meeting-timer</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/absolute/path/to/dramatic-meeting-timer/.venv/bin/python</string>
-        <string>/absolute/path/to/dramatic-meeting-timer/app.py</string>
-    </array>
-    <key>WorkingDirectory</key>
-    <string>/absolute/path/to/dramatic-meeting-timer</string>
-    <key>RunAtLoad</key>
-    <true/>
-</dict>
-</plist>
-```
-
-Load it:
-
-```bash
-launchctl bootout gui/"$(id -u)" ~/Library/LaunchAgents/com.dramatic-meeting-timer.plist 2>/dev/null || true
-launchctl bootstrap gui/"$(id -u)" ~/Library/LaunchAgents/com.dramatic-meeting-timer.plist
-```
+Build the application and launch it manually once so macOS can ask for Calendar
+access. Then open **System Settings → General → Login Items & Extensions** and add
+`Dramatic Meeting Timer.app` under **Open at Login**.
 
 ## Troubleshooting
 
@@ -115,5 +134,10 @@ launchctl bootstrap gui/"$(id -u)" ~/Library/LaunchAgents/com.dramatic-meeting-t
   Security → Calendars**, then restart the app.
 - **No music:** confirm exactly one supported audio file is present in `assets/`,
   then restart the app. The file is loaded at startup.
-- **LaunchAgent does not start:** confirm both absolute paths in the plist exist and
-  run `plutil -lint ~/Library/LaunchAgents/com.dramatic-meeting-timer.plist`.
+- **Build asks for a framework Python:** rebuild the generated environment with
+  Homebrew Python, then sync again:
+
+  ```bash
+  uv venv --clear --python "$(brew --prefix python@3.11)/bin/python3.11"
+  uv sync --locked
+  ```
